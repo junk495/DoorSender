@@ -1,9 +1,8 @@
 // =====================================================================================
 // Tuersender (code4)
 // -------------------------------------------------------------------------------------
-// Letzte Änderung: 06. Juli 2025, 18:30 (Speicheroptimierung für ATmega168)
+// Letzte Änderung: 10. Mai 2026 (Robuster UART-Boot & Retry-Logik)
 // Hardware:          Arduino Pro Mini (3.3V, 16MHz, ATmega168), INA219 Sensor
-// ... (restlicher Header bleibt gleich) ...
 // =====================================================================================
 
 #include <Arduino.h>
@@ -16,7 +15,7 @@
 #include <Adafruit_INA219.h>
 #include "secrets.h"
 
-// PIN-Definitionen und Konstanten bleiben unverändert
+// PIN-Definitionen und Konstanten
 #define TOUCH_PIN 2
 #define POWER_PIN 12
 #define LED_PIN 13
@@ -29,7 +28,7 @@
 #define EEPROM_ADDR_ID 0
 
 
-const bool DEBUG = false;
+const bool DEBUG = true;
 const bool USE_DEEP_SLEEP = true;
 
 struct __attribute__((packed)) LoRaPayload {
@@ -41,7 +40,7 @@ struct __attribute__((packed)) LoRaPayload {
   bool  fingerEventValid;
   uint16_t actionID;
   float batteryVoltage;
-  uint8_t wakeupCause; // <-- WICHTIG: Das hat gefehlt!
+  uint8_t wakeupCause; // <-- WICHTIG: Das hat gefehlt! Füllt das Paket auf 38 Bytes.
 };
 
 SoftwareSerial fingerSerial(10, 11);
@@ -70,7 +69,7 @@ void blinkLED(uint8_t times) {
 // Führt den Registrierungsprozess für einen neuen Fingerabdruck durch.
 bool enrollFinger(uint8_t id) {
   finger.LEDcontrol(FINGERPRINT_LED_BREATHING, 200, 0x02, 0);
-  if (DEBUG) Serial.println(F("L: P1")); // GEÄNDERT: "Platzier Finger 1"
+  if (DEBUG) Serial.println(F("L: P1")); 
 
   unsigned long startEnrollTime = millis();
   bool fingerPlaced = false;
@@ -83,7 +82,7 @@ bool enrollFinger(uint8_t id) {
   } while (millis() - startEnrollTime < 3000);
 
   if (!fingerPlaced) {
-    if (DEBUG) Serial.println(F("L: T/O1")); // GEÄNDERT: "Timeout 1"
+    if (DEBUG) Serial.println(F("L: T/O1")); 
     finger.LEDcontrol(FINGERPRINT_LED_ON, 0, 0x01, 0);
     delay(1000);
     finger.LEDcontrol(FINGERPRINT_LED_OFF, 0, 0, 0);
@@ -98,7 +97,7 @@ bool enrollFinger(uint8_t id) {
   }
   
   finger.LEDcontrol(FINGERPRINT_LED_ON, 0, 0x04, 0);
-  if (DEBUG) Serial.println(F("L: REM")); // GEÄNDERT: "Entfernen"
+  if (DEBUG) Serial.println(F("L: REM")); 
   delay(1000);
   
   unsigned long startRemoveTime = millis();
@@ -112,7 +111,7 @@ bool enrollFinger(uint8_t id) {
   } while (millis() - startRemoveTime < 3000);
 
   if (!fingerRemoved) {
-    if (DEBUG) Serial.println(F("L: T/O-R")); // GEÄNDERT: "Timeout Entfernen"
+    if (DEBUG) Serial.println(F("L: T/O-R")); 
     finger.LEDcontrol(FINGERPRINT_LED_ON, 0, 0x01, 0);
     delay(1000);
     finger.LEDcontrol(FINGERPRINT_LED_OFF, 0, 0, 0);
@@ -120,7 +119,7 @@ bool enrollFinger(uint8_t id) {
   }
 
   finger.LEDcontrol(FINGERPRINT_LED_BREATHING, 200, 0x02, 0);
-  if (DEBUG) Serial.println(F("L: P2")); // GEÄNDERT: "Platzier Finger 2"
+  if (DEBUG) Serial.println(F("L: P2")); 
   
   startEnrollTime = millis();
   fingerPlaced = false;
@@ -133,7 +132,7 @@ bool enrollFinger(uint8_t id) {
   } while (millis() - startEnrollTime < 3000);
 
   if (!fingerPlaced) {
-    if (DEBUG) Serial.println(F("L: T/O2")); // GEÄNDERT: "Timeout 2"
+    if (DEBUG) Serial.println(F("L: T/O2")); 
     finger.LEDcontrol(FINGERPRINT_LED_ON, 0, 0x01, 0);
     delay(1000);
     finger.LEDcontrol(FINGERPRINT_LED_OFF, 0, 0, 0);
@@ -180,7 +179,7 @@ void setup() {
 
   delay(100);
   if (digitalRead(LEARN_PIN) == LOW) {
-    if (DEBUG) Serial.println(F("L: MODE")); // GEÄNDERT
+    if (DEBUG) Serial.println(F("L: MODE")); 
     digitalWrite(POWER_PIN, LOW);
     delay(50);
     fingerSerial.begin(57600);
@@ -189,14 +188,14 @@ void setup() {
 
     if (finger.verifyPassword()) {
       if (enrollFinger(nextID)) {
-        if (DEBUG) Serial.println(F("L: OK")); // GEÄNDERT
+        if (DEBUG) Serial.println(F("L: OK")); 
         nextID++;
         EEPROM.write(EEPROM_ADDR_ID, nextID);
       } else {
-        if (DEBUG) Serial.println(F("L: FAIL")); // GEÄNDERT
+        if (DEBUG) Serial.println(F("L: FAIL")); 
       }
     } else {
-      if (DEBUG) Serial.println(F("F: VFAIL_S")); // GEÄNDERT
+      if (DEBUG) Serial.println(F("F: VFAIL_S")); 
       for(int i = 0; i < 6; i++) {
         digitalWrite(LED_PIN, HIGH); delay(200);
         digitalWrite(LED_PIN, LOW); delay(200);
@@ -213,7 +212,8 @@ void setup() {
     }
   }
 
-  attachInterrupt(digitalPinToInterrupt(TOUCH_PIN), touchInterrupt, CHANGE);
+  // WICHTIG: Einheitlich auf FALLING geändert
+  attachInterrupt(digitalPinToInterrupt(TOUCH_PIN), touchInterrupt, FALLING);
   blinkLED(2);
   if (DEBUG) Serial.println(F("S: END")); 
   delay(500);
@@ -222,7 +222,6 @@ void setup() {
 // ======================= LOOP FUNKTION =======================
 void loop() {
   
-  // 1. ARBEITS-BLOCK: Nur ausführen, wenn wir geweckt wurden
   if (wakeSignal) {
     wakeSignal = false;
     
@@ -232,34 +231,48 @@ void loop() {
 
     blinkLED(1);
 
-    // Strom AN und Sensor booten lassen
+    // --- 1. UART-PINS VORBEREITEN ---
+    // Bevor der Sensor Strom bekommt, MÜSSEN die Datenleitungen auf HIGH liegen.
+    // Liegen sie auf LOW, stürzt der Sensor-UART beim Booten durch eine Break-Condition ab!
+    pinMode(11, OUTPUT); 
+    digitalWrite(11, HIGH); 
+    pinMode(10, INPUT_PULLUP); 
+
+    // --- 2. STROM AN & BOOTEN ---
     digitalWrite(POWER_PIN, LOW); 
     
-    // Gib ihm ruhig 1 ganze Sekunde für den Boot. Batterie kostet das quasi nichts.
+    // Gib ihm ruhig 1 ganze Sekunde für den Boot.
     delay(1000); 
 
-    // I2C starten
+    // --- 3. HARDWARE INIT ---
     Wire.begin();
     Wire.setWireTimeout(25000, true); 
     ina219.begin();
 
-    // Fingerprint Serial starten
-    fingerSerial.begin(57600);
+    finger.begin(57600); // Ruft intern fingerSerial.begin() auf
     fingerSerial.listen();
-    delay(50); 
+    delay(100); 
 
-    // --- NEU: DIE PUFFER-SPÜLUNG ---
-    // Wir werfen allen "Strom-Einschalt-Müll" weg, bevor wir mit dem Sensor reden!
+    // Puffer spülen (Einschalt-Müll sicher entfernen)
     while (fingerSerial.available()) {
         fingerSerial.read();
     }
 
-    finger.begin(57600);
-    delay(50); 
+    // --- 4. ROBUSTER HANDSHAKE (RETRY-LOGIK) ---
+    // Manchmal braucht der Sensor 1100ms. Diese Schleife rettet uns davor!
+    bool sensorReady = false;
+    for (int i = 0; i < 3; i++) {
+      if (finger.verifyPassword()) {
+        sensorReady = true;
+        break; // Sensor hat geantwortet! Schleife abbrechen.
+      }
+      delay(300); // Kurz warten und nochmal anklopfen
+    }
 
-    finger.LEDcontrol(FINGERPRINT_LED_BREATHING, 200, 0x02, 0);
-    if (finger.verifyPassword()) {
+    if (sensorReady) {
+      finger.LEDcontrol(FINGERPRINT_LED_BREATHING, 200, 0x02, 0);
       if (DEBUG) Serial.println(F("F: VFY"));
+      
       uint8_t result;
       uint32_t start = millis();
       const uint32_t timeout = 3000;
@@ -284,9 +297,9 @@ void loop() {
         p.fingerEventValid = true;
         p.fingerID = finger.fingerID;
         p.confidence = finger.confidence;
-        p.actionID = NUKI_TRIGGER_ID; // WICHTIG: Das Define muss oben stehen!
+        p.actionID = NUKI_TRIGGER_ID; 
         p.batteryVoltage = ina219.getBusVoltage_V();
-        p.wakeupCause = 0; // Unser Dummy-Byte für die 38 Bytes
+        p.wakeupCause = 0; // Unser Dummy-Byte für die exakten 38 Bytes
 
         e220ttl.sendMessage(&p, sizeof(p));
         delay(500); // Dem Modul Zeit zum Senden geben
@@ -296,32 +309,34 @@ void loop() {
         delay(1000);
       }
       finger.LEDcontrol(FINGERPRINT_LED_OFF, 0, 0, 0); 
+      
     } else {
+      // Sensor hat trotz 3 Versuchen nicht geantwortet
+      if (DEBUG) Serial.println(F("F: FAIL BOOT"));
       for(int i = 0; i < 6; i++) {
         digitalWrite(LED_PIN, HIGH); delay(200);
         digitalWrite(LED_PIN, LOW); delay(200);
       }
     }
 
-   // --- STROM ABSCHALTEN & PHANTOM-STROM VERHINDERN ---
+    // --- 5. STROM ABSCHALTEN & PHANTOM-STROM VERHINDERN ---
     digitalWrite(POWER_PIN, HIGH); 
 
     // WICHTIG: Alle Kommunikations-Pins komplett tot legen!
     pinMode(LORA_TX, INPUT); digitalWrite(LORA_TX, LOW);
-    pinMode(11, INPUT);      digitalWrite(11, LOW); // Fingerprint Arduino TX
-    pinMode(10, INPUT);      digitalWrite(10, LOW); // NEU: Fingerprint Arduino RX !!!
+    pinMode(11, INPUT);      digitalWrite(11, LOW); 
+    pinMode(10, INPUT);      digitalWrite(10, LOW); 
 
     // I2C Hardware hart abschalten und Pins runterziehen
-    TWCR = 0; // NEU: Schaltet das TWI (I2C) Register im ATmega komplett ab
+    TWCR = 0; 
     pinMode(A4, INPUT);      digitalWrite(A4, LOW); 
     pinMode(A5, INPUT);      digitalWrite(A5, LOW);
 
     blinkLED(2);
   }
 
-  // 2. SCHLAF-BLOCK: Wird immer erreicht, wenn die Arbeit erledigt ist
+  // SCHLAF-BLOCK
   if (USE_DEEP_SLEEP) {
-    // RISING statt CHANGE: Wacht nur auf, wenn der Finger AUFGELEGT wird!
     attachInterrupt(digitalPinToInterrupt(TOUCH_PIN), touchInterrupt, FALLING);
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
   }
