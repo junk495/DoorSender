@@ -41,6 +41,7 @@ struct __attribute__((packed)) LoRaPayload {
   bool  fingerEventValid;
   uint16_t actionID;
   float batteryVoltage;
+  uint8_t wakeupCause; // <-- WICHTIG: Das hat gefehlt!
 };
 
 SoftwareSerial fingerSerial(10, 11);
