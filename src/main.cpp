@@ -27,7 +27,7 @@
 #define DESTINATION_ADDL 2
 #define EEPROM_ADDR_ID 0
 
-const bool DEBUG = false;
+const bool DEBUG = true;
 const bool USE_DEEP_SLEEP = true;
 
 struct __attribute__((packed)) LoRaPayload {
