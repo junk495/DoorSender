@@ -1,7 +1,7 @@
 // =====================================================================================
 // Tuersender (code4)
 // -------------------------------------------------------------------------------------
-// Letzte Änderung: 10. Mai 2026 (Robuster UART-Boot, Retry-Logik & AUX-Check)
+// Letzte Änderung: 10. Mai 2026 (Agiler UART-Boot, Retry-Logik, AUX-Check & Multitasking)
 // Hardware:          Arduino Pro Mini (3.3V, 16MHz, ATmega168), INA219 Sensor
 // =====================================================================================
 
@@ -27,7 +27,7 @@
 #define DESTINATION_ADDL 2
 #define EEPROM_ADDR_ID 0
 
-const bool DEBUG = true;
+const bool DEBUG = false;
 const bool USE_DEEP_SLEEP = true;
 
 struct __attribute__((packed)) LoRaPayload {
@@ -39,7 +39,7 @@ struct __attribute__((packed)) LoRaPayload {
   bool  fingerEventValid;
   uint16_t actionID;
   float batteryVoltage;
-  uint8_t wakeupCause; // <-- WICHTIG: Das hat gefehlt! Füllt das Paket auf 38 Bytes.
+  uint8_t wakeupCause; // <-- WICHTIG: Das hat gefehlt! Füllt das Paket auf exakt 38 Bytes.
 };
 
 SoftwareSerial fingerSerial(10, 11);
@@ -228,48 +228,57 @@ void loop() {
     detachInterrupt(digitalPinToInterrupt(TOUCH_PIN));
     if (DEBUG) Serial.println(F("I: WAKE"));
 
-    blinkLED(1);
-
-    // --- 1. UART-PINS VORBEREITEN ---
+    // --- 1. STROM SOFORT AN (jede Millisekunde zählt!) ---
     // Bevor der Sensor Strom bekommt, MÜSSEN die Datenleitungen auf HIGH liegen.
-    // Liegen sie auf LOW, stürzt der Sensor-UART beim Booten durch eine Break-Condition ab!
     pinMode(11, OUTPUT); 
     digitalWrite(11, HIGH); 
     pinMode(10, INPUT_PULLUP); 
-
-    // --- 2. STROM AN & BOOTEN ---
-    digitalWrite(POWER_PIN, LOW); 
     
-    // Gib ihm ruhig 1 ganze Sekunde für den Boot.
-    delay(1000); 
+    digitalWrite(POWER_PIN, LOW); // Sensor bootet ab exakt JETZT!
+    unsigned long bootStartTime = millis();
 
-    // --- 3. HARDWARE INIT ---
+    // --- 2. MULTITASKING WÄHREND DEM BOOTEN ---
+    // Wir nutzen die Hochfahr-Zeit des Sensors, um das Arduino-Blinken 
+    // und den I2C-Start abzuarbeiten. Das spart uns 300ms reine Wartezeit!
     Wire.begin();
     Wire.setWireTimeout(25000, true); 
     ina219.begin();
 
+    // Arduino Status-LED blinken (versteckt sich in der Sensor-Boot-Zeit)
+    digitalWrite(LED_PIN, HIGH);
+    delay(150);
+    digitalWrite(LED_PIN, LOW);
+
+    // --- 3. RESTLICHE BOOT-ZEIT ABWARTEN ---
+    // Der Sensor braucht ca. 800ms. Wir ziehen die Zeit ab, die das Blinken gekostet hat.
+    unsigned long elapsed = millis() - bootStartTime;
+    if (elapsed < 800) {
+        delay(800 - elapsed);
+    }
+
     finger.begin(57600); // Ruft intern fingerSerial.begin() auf
     fingerSerial.listen();
-    delay(100); 
+    delay(50); 
 
     // Puffer spülen (Einschalt-Müll sicher entfernen)
     while (fingerSerial.available()) {
         fingerSerial.read();
     }
 
-    // --- 4. ROBUSTER HANDSHAKE (RETRY-LOGIK) ---
-    // Manchmal braucht der Sensor 1100ms. Diese Schleife rettet uns davor!
+    // --- 4. AGILERER HANDSHAKE & LED SOFORT AN ---
+    // 4 schnelle Versuche (a 150ms), um den allerersten wachen Moment zu erwischen!
     bool sensorReady = false;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
       if (finger.verifyPassword()) {
+        // JAAAA! Sensor ist wach -> SOFORT DIE LED EINSCHALTEN!
+        finger.LEDcontrol(FINGERPRINT_LED_BREATHING, 200, 0x02, 0);
         sensorReady = true;
-        break; // Sensor hat geantwortet! Schleife abbrechen.
+        break; 
       }
-      delay(300); // Kurz warten und nochmal anklopfen
+      delay(150); 
     }
 
     if (sensorReady) {
-      finger.LEDcontrol(FINGERPRINT_LED_BREATHING, 200, 0x02, 0);
       if (DEBUG) Serial.println(F("F: VFY"));
       
       uint8_t result;
@@ -296,7 +305,7 @@ void loop() {
         p.fingerEventValid = true;
         p.fingerID = finger.fingerID;
         p.confidence = finger.confidence;
-        p.actionID = NUKI_TRIGGER_ID; // Wird jetzt korrekt aus secrets.h geladen!
+        p.actionID = NUKI_TRIGGER_ID; 
         p.batteryVoltage = ina219.getBusVoltage_V();
         p.wakeupCause = 0; // Unser Dummy-Byte für die exakten 38 Bytes
 
@@ -317,7 +326,7 @@ void loop() {
       finger.LEDcontrol(FINGERPRINT_LED_OFF, 0, 0, 0); 
       
     } else {
-      // Sensor hat trotz 3 Versuchen nicht geantwortet
+      // Sensor hat trotz 4 Versuchen nicht geantwortet
       if (DEBUG) Serial.println(F("F: FAIL BOOT"));
       for(int i = 0; i < 6; i++) {
         digitalWrite(LED_PIN, HIGH); delay(200);
@@ -328,8 +337,8 @@ void loop() {
     // --- 5. STROM ABSCHALTEN & PHANTOM-STROM VERHINDERN ---
     digitalWrite(POWER_PIN, HIGH); 
 
-    // WICHTIG: Alle Kommunikations-Pins komplett tot legen!
-    pinMode(LORA_TX, INPUT); digitalWrite(LORA_TX, LOW);
+    // WICHTIG: Nur Fingerprint-Pins komplett tot legen (da dieser stromlos ist)
+    // LORA_TX wird NICHT angefasst, da das LoRa-Modul unter Strom bleibt!
     pinMode(11, INPUT);      digitalWrite(11, LOW); 
     pinMode(10, INPUT);      digitalWrite(10, LOW); 
 
