@@ -1,7 +1,7 @@
 // =====================================================================================
 // Tuersender (code4)
 // -------------------------------------------------------------------------------------
-// Letzte Änderung: 10. Mai 2026 (Robuster UART-Boot & Retry-Logik)
+// Letzte Änderung: 10. Mai 2026 (Robuster UART-Boot, Retry-Logik & AUX-Check)
 // Hardware:          Arduino Pro Mini (3.3V, 16MHz, ATmega168), INA219 Sensor
 // =====================================================================================
 
@@ -26,7 +26,6 @@
 
 #define DESTINATION_ADDL 2
 #define EEPROM_ADDR_ID 0
-
 
 const bool DEBUG = true;
 const bool USE_DEEP_SLEEP = true;
@@ -122,16 +121,16 @@ bool enrollFinger(uint8_t id) {
   if (DEBUG) Serial.println(F("L: P2")); 
   
   startEnrollTime = millis();
-  fingerPlaced = false;
+  bool fingerPlaced2 = false;
   do {
     if (finger.getImage() == FINGERPRINT_OK) {
-      fingerPlaced = true;
+      fingerPlaced2 = true;
       break;
     }
     delay(50);
   } while (millis() - startEnrollTime < 3000);
 
-  if (!fingerPlaced) {
+  if (!fingerPlaced2) {
     if (DEBUG) Serial.println(F("L: T/O2")); 
     finger.LEDcontrol(FINGERPRINT_LED_ON, 0, 0x01, 0);
     delay(1000);
@@ -297,12 +296,19 @@ void loop() {
         p.fingerEventValid = true;
         p.fingerID = finger.fingerID;
         p.confidence = finger.confidence;
-        p.actionID = NUKI_TRIGGER_ID; 
+        p.actionID = NUKI_TRIGGER_ID; // Wird jetzt korrekt aus secrets.h geladen!
         p.batteryVoltage = ina219.getBusVoltage_V();
         p.wakeupCause = 0; // Unser Dummy-Byte für die exakten 38 Bytes
 
         e220ttl.sendMessage(&p, sizeof(p));
-        delay(500); // Dem Modul Zeit zum Senden geben
+        
+        // --- PROFI-LÖSUNG ZUM SENDEN ---
+        // Anstatt fix 500ms zu warten, warten wir genau so lange, bis das LoRa Modul 
+        // über den AUX-Pin meldet: "Ich habe fertig gesendet!" (Max. 1,5 Sekunden Timeout)
+        unsigned long waitStart = millis();
+        while (digitalRead(LORA_AUX) == LOW && (millis() - waitStart < 1500)) {
+          delay(10);
+        }
         
       } else {
         finger.LEDcontrol(FINGERPRINT_LED_ON, 0, 0x01, 0); 
