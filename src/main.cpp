@@ -242,7 +242,7 @@ void loop() {
     // und den I2C-Start abzuarbeiten. Das spart uns 300ms reine Wartezeit!
     Wire.begin();
     Wire.setWireTimeout(25000, true); 
-    ina219.begin();
+  
 
     // Arduino Status-LED blinken (versteckt sich in der Sensor-Boot-Zeit)
     digitalWrite(LED_PIN, HIGH);
@@ -255,6 +255,7 @@ void loop() {
     if (elapsed < 800) {
         delay(800 - elapsed);
     }
+    ina219.begin();
 
     finger.begin(57600); // Ruft intern fingerSerial.begin() auf
     fingerSerial.listen();
@@ -306,7 +307,7 @@ void loop() {
         p.fingerID = finger.fingerID;
         p.confidence = finger.confidence;
         p.actionID = NUKI_TRIGGER_ID; 
-        p.batteryVoltage = ina219.getBusVoltage_V();
+        p.batteryVoltage = ina219.getBusVoltage_V() / 2; // Mein INA gibt sonst den doppelten Wert aus, warum auch immer.
         p.wakeupCause = 0; // Unser Dummy-Byte für die exakten 38 Bytes
 
         e220ttl.sendMessage(&p, sizeof(p));
